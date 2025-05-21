@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>A/B Testing Demo</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    input, button { margin: 5px; padding: 5px; }
+    #log { max-height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-top: 10px; background: #f9f9f9; }
+    .variant-a { color: green; }
+    .variant-b { color: blue; }
+    .excluded { color: gray; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background-color: #f0f0f0; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>A/B Testing Demo</h1>
+  <div>
+    <label>User ID: <input type="text" id="userId" value="user123" /></label>
+    <label>Token ID: <input type="text" id="tokenId" value="token123" /></label>
+    <button onclick="runSingleTest()">Run A/B Test</button>
+    <button onclick="runSimulateTest()">Simulate Traffic (100 Users)</button>
+  </div>
+
+  <div id="flagInfo"><b>Flag Info:</b> Loading...</div>
+
+  <div id="progress"></div>
+
+  <!-- Table for showing test results -->
+  <h2>Run AB TEST Results</h2>
+  <table id="abTestTable" border="1" style="margin-bottom: 20px;">
+    <thead>
+      <tr>
+        <th>User ID</th>
+        <th>Token ID</th>
+        <th>Variant</th>
+        <th>Message</th>
+        <th>Hash</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Simulated Traffic Results</h2>
+  <table id="simulationTable" border="1">
+    <thead>
+      <tr>
+        <th>User ID</th>
+        <th>Token ID</th>
+        <th>Variant</th>
+        <th>Message</th>
+        <th>Hash</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  
+  <button onclick="runSimulateTest()">Simulate Traffic (100 Users)</button>
+  
+  <div id="simFlagInfo" style="margin-top: 10px;"></div>
+  <canvas id="variantChart" width="400" height="200"></canvas>
+
+  <script>
+    const BASE_URL = 'http://localhost:3000';
+    const FLAG_NAME = 'banner-test';
+    // const FLAG_NAME = 'new-feature';
+
+    window.onload = fetchFlagInfo;
+
+    function generateRandomId(prefix = 'user') {
+        return `${prefix}${Math.floor(Math.random() * 100000)}`;
+    }
+
+    function getCssClass(variant) {
+      if (!variant || variant.toLowerCase() === 'excluded') return 'excluded';
+      if (variant.toLowerCase().includes('1') || variant.toLowerCase() === 'a') return 'variant-a';
+      if (variant.toLowerCase().includes('2') || variant.toLowerCase() === 'b') return 'variant-b';
+      return '';
+    }
+
+    function renderTestResult(data, targetTableId = 'abTestTable') {
+        const tableBody = document.getElementById(targetTableId).querySelector('tbody');
+        const row = document.createElement('tr');
+        row.className = getCssClass(data.variant);
+        row.innerHTML = `
+            <td>${data.userId}</td>
+            <td>${data.tokenId}</td>
+            <td>${data.variant}</td>
+            <td>${data.message || ''}</td>
+            <td>${data.hashValue || ''}</td>
+            <td>${data.reason || ''}</td>
+        `;
+
+        tableBody.appendChild(row);
+    }
+
+    function appendRow(userId, variant, message = '') {
+      const tbody = document.getElementById('resultsBody');
+      const row = document.createElement('tr');
+      row.className = getCssClass(variant);
+      row.innerHTML = `
+        <td>${userId}</td>
+        <td><b>${variant}</b></td>
+        <td>${message}</td>
+        `;
+      tbody.appendChild(row);
+    }
+
+    async function fetchFlagInfo() {
+      const infoDiv = document.getElementById('flagInfo');
+      try {
+        const res = await fetch(`${BASE_URL}/abtest/flag-config?flagName=${FLAG_NAME}`);
+        const config = await res.json();
+        infoDiv.innerHTML = `
+          <b>Flag:</b> ${FLAG_NAME}<br/>
+          <b>Active:</b> ${config.active}<br/>
+          <b>Sampling Rate:</b> ${config.samplingRate}<br/>
+          <b>Variants:</b> ${config.variants?.join(', ')}
+        `;
+      } catch (err) {
+        infoDiv.innerHTML = `<b>Failed to load flag config:</b> ${err.message}`;
+      }
+    }
+
+    function generateRandomId(prefix = 'user') {
+        return `${prefix}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    }
+
+    async function runSingleTest() {
+        const userIdInput = document.getElementById('userId');
+        const tokenIdInput = document.getElementById('tokenId');
+
+        // Generate random IDs if not provided
+        let userId = userIdInput.value.trim();
+        if (!userId) {
+            userId = generateRandomId('user');
+        }
+
+        let tokenId = tokenIdInput.value.trim();
+        if (!tokenId) {
+            tokenId = generateRandomId('token');
+        }
+
+        // // Clear inputs
+        // userIdInput.value = '';
+        // tokenIdInput.value = '';
+
+        // Optionally clear previous results (comment out if you want to append)
+        // document.getElementById('abTestTable').querySelector('tbody').innerHTML = '';
+
+        const url = `${BASE_URL}/abtest/run?userId=${userId}&tokenId=${tokenId}&flagName=${FLAG_NAME}`;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            renderTestResult(data, 'abTestTable');
+        } catch (err) {
+            console.error('Error:', err.message);
+            document.getElementById('progress').innerText = `Error: ${err.message}`;
+        }
+    }
+
+    let variantChartInstance;
+
+async function runSimulateTest() {
+  const progress = document.getElementById('progress');
+  const simTableBody = document.getElementById('simulationTable').querySelector('tbody');
+  const infoDiv = document.getElementById('simFlagInfo');
+  const chartCanvas = document.getElementById('variantChart');
+  simTableBody.innerHTML = ''; // clear previous simulation results
+  progress.innerText = 'Running simulation...';
+  infoDiv.innerHTML = '';
+
+  const userIds = [];
+  for (let i = 0; i < 100; i++) {
+    userIds.push(`simUser${i}`);
+  }
+
+  const url = `${BASE_URL}/abtest/simulate?flagName=${FLAG_NAME}&userIds=${userIds.join(',')}`;
+  try {
+    const res = await fetch(url);
+    const resultData = await res.json();
+
+    // Track variant counts
+    const variantCounts = {};
+
+    resultData.forEach(result => {
+      const variant = result.variant || 'Excluded';
+      const row = document.createElement('tr');
+      row.className = getCssClass(variant);
+      row.innerHTML = `
+        <td>${result.userId}</td>
+        <td>${result.tokenId || ''}</td>
+        <td><b>${variant}</b></td>
+        <td>${result.message || ''}</td>
+        <td>${result.hashValue || ''}</td>
+        <td>${result.reason || ''}</td>
+      `;
+      simTableBody.appendChild(row);
+      variantCounts[variant] = (variantCounts[variant] || 0) + 1;
+    });
+
+    progress.innerText = `Simulation Complete: ${resultData.length} users`;
+
+    // Fetch flag config to show metadata
+    const flagConfig = await fetch(`${BASE_URL}/abtest/flag-config?flagName=${FLAG_NAME}`).then(res => res.json());
+
+    // Build variant stats list
+    let variantStatsHtml = `<br/><b>Variant Distribution:</b><ul>`;
+    const labels = [];
+    const values = [];
+    const bgColors = [];
+
+    Object.entries(variantCounts).forEach(([variant, count]) => {
+      const percent = ((count / resultData.length) * 100).toFixed(1);
+      variantStatsHtml += `<li><span class="${getCssClass(variant)}">${variant}</span>: ${count} users (${percent}%)</li>`;
+      labels.push(variant);
+      values.push(count);
+      bgColors.push(getBarColor(variant));
+    });
+    variantStatsHtml += `</ul>`;
+
+    infoDiv.innerHTML = `
+      <br/>Flag: ${FLAG_NAME}<br/>
+      Active: ${flagConfig.active}<br/>
+      Sampling Rate: ${flagConfig.samplingRate}<br/>
+      Variants: ${flagConfig.variants?.join(', ')}
+      ${variantStatsHtml}
+    `;
+
+    // Render Chart
+    if (variantChartInstance) variantChartInstance.destroy();
+    variantChartInstance = new Chart(chartCanvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'User Count per Variant',
+          data: values,
+          backgroundColor: bgColors
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            label: ctx => `${ctx.parsed.y} users`
+          }}
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { stepSize: 10 }
+          }
+        }
+      }
+    });
+
+  } catch (err) {
+    progress.innerText = 'Error: ' + err.message;
+  }
+}
+
+function getBarColor(variant) {
+  if (!variant || variant.toLowerCase() === 'excluded') return '#888';
+  if (variant.toLowerCase().includes('1') || variant.toLowerCase() === 'a') return '#4caf50'; // green
+  if (variant.toLowerCase().includes('2') || variant.toLowerCase() === 'b') return '#2196f3'; // blue
+  return '#999';
+}
+
+
+  </script>
+</body>
+</html>
